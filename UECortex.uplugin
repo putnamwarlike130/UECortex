@@ -1,0 +1,66 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"EngineVersion": "5.6.0",
+	"Category": "Developer",
+	"Description": "MCP server for Unreal Engine. Control the editor via Claude Code and VS Code.",
+	"EnabledByDefault": false,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Plugins": [
+		{ "Name": "EnhancedInput",      "Enabled": true },
+		{ "Name": "Niagara",            "Enabled": true },
+		{ "Name": "GeometryScripting",  "Enabled": false, "Optional": true },
+		{ "Name": "GameplayAbilities",  "Enabled": false, "Optional": true },
+		{ "Name": "PCG",                "Enabled": false, "Optional": true }
+	],
+	"Modules": [
+		{
+			"Name": "UECortex",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		},
+		{
+			"Name": "UECortexGAS",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexPCG",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexNiagara",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexUMG",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexAnim",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexAsset",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexSequencer",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		},
+		{
+			"Name": "UECortexPython",
+			"Type": "Editor",
+			"LoadingPhase": "None"
+		}
+	]
+}
