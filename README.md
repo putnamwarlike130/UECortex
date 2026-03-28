@@ -157,7 +157,7 @@ All other categories load unconditionally.
 
 | Module | Contents |
 |--------|----------|
-| `UECortex` | Core server, router, registry, level/blueprint/rendering/spline/cpp tools |
+| `UECortex` | Core server, router, registry, level/blueprint/rendering/spline/cpp tools, `editor_input`, `viewport_capture`, `fab_login_status` |
 | `UECortexPCG` | PCG graph tools |
 | `UECortexGAS` | Gameplay Ability System tools |
 | `UECortexNiagara` | Niagara VFX tools |
@@ -166,4 +166,3 @@ All other categories load unconditionally.
 | `UECortexAsset` | Asset management tools |
 | `UECortexSequencer` | Level Sequence / cinematics tools |
 | `UECortexPython` | Python executor + dynamic tool registry |
-| `UECortex` (core) | Also includes: `editor_input`, `viewport_capture`, `fab_login_status` |
