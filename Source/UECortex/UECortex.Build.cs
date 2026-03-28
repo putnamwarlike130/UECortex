@@ -30,7 +30,16 @@ public class UECortex : ModuleRules
 			"NavigationSystem",
 			"EnhancedInput",
 			"HotReload",
+		"ImageWrapper",
+		"ApplicationCore",
+		"OnlineSubsystem",
 		});
+
+		// Mac: CoreGraphics + AppKit for editor window capture and input simulation
+		if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			PublicFrameworks.AddRange(new string[] { "CoreGraphics", "AppKit", "Foundation" });
+		}
 
 		// PCG and GAS are handled by UECortexPCG / UECortexGAS submodules — no dependency here.
 

@@ -6,9 +6,14 @@
 // Result returned by every tool call
 struct FMCPToolResult
 {
-	bool bSuccess;
+	bool bSuccess = true;
 	FString Message;
 	TSharedPtr<FJsonObject> Data; // optional structured data
+
+	// Image result fields
+	bool bIsImage = false;
+	FString ImageBase64;
+	FString ImageMimeType = TEXT("image/png");
 
 	static FMCPToolResult Success(const FString& Msg)
 	{
@@ -32,6 +37,17 @@ struct FMCPToolResult
 		FMCPToolResult R;
 		R.bSuccess = false;
 		R.Message = Msg;
+		return R;
+	}
+
+	// Returns an image content block (base64-encoded PNG by default)
+	static FMCPToolResult Image(const FString& Base64Data, const FString& MimeType = TEXT("image/png"))
+	{
+		FMCPToolResult R;
+		R.bSuccess = true;
+		R.bIsImage = true;
+		R.ImageBase64 = Base64Data;
+		R.ImageMimeType = MimeType;
 		return R;
 	}
 };

@@ -123,23 +123,35 @@ FString FMCPRouter::HandleToolsCall(int32 Id, const TSharedPtr<FJsonObject>& Par
 	auto Result = MakeShared<FJsonObject>();
 	TArray<TSharedPtr<FJsonValue>> Content;
 
-	auto TextContent = MakeShared<FJsonObject>();
-	TextContent->SetStringField(TEXT("type"), TEXT("text"));
-
-	if (ToolResult.Data.IsValid())
+	if (ToolResult.bIsImage)
 	{
-		// Serialize structured data as JSON string
-		FString DataStr;
-		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&DataStr);
-		FJsonSerializer::Serialize(ToolResult.Data.ToSharedRef(), Writer);
-		TextContent->SetStringField(TEXT("text"), ToolResult.Message + TEXT("\n") + DataStr);
+		// Image content block per MCP spec
+		auto ImageContent = MakeShared<FJsonObject>();
+		ImageContent->SetStringField(TEXT("type"), TEXT("image"));
+		ImageContent->SetStringField(TEXT("data"), ToolResult.ImageBase64);
+		ImageContent->SetStringField(TEXT("mimeType"), ToolResult.ImageMimeType);
+		Content.Add(MakeShared<FJsonValueObject>(ImageContent));
 	}
 	else
 	{
-		TextContent->SetStringField(TEXT("text"), ToolResult.Message);
+		auto TextContent = MakeShared<FJsonObject>();
+		TextContent->SetStringField(TEXT("type"), TEXT("text"));
+
+		if (ToolResult.Data.IsValid())
+		{
+			FString DataStr;
+			TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&DataStr);
+			FJsonSerializer::Serialize(ToolResult.Data.ToSharedRef(), Writer);
+			TextContent->SetStringField(TEXT("text"), ToolResult.Message + TEXT("\n") + DataStr);
+		}
+		else
+		{
+			TextContent->SetStringField(TEXT("text"), ToolResult.Message);
+		}
+
+		Content.Add(MakeShared<FJsonValueObject>(TextContent));
 	}
 
-	Content.Add(MakeShared<FJsonValueObject>(TextContent));
 	Result->SetArrayField(TEXT("content"), Content);
 	Result->SetBoolField(TEXT("isError"), false);
 

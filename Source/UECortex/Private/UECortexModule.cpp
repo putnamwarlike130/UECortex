@@ -7,6 +7,9 @@
 #include "Tools/MCPBlueprintTools.h"
 #include "Tools/MCPCppCodegenTools.h"
 #include "Tools/MCPRenderingTools.h"
+#include "Tools/MCPViewportCaptureTools.h"
+#include "Tools/MCPEditorInputTools.h"
+#include "Tools/MCPFabTools.h"
 #include "Modules/ModuleManager.h"
 
 DEFINE_LOG_CATEGORY(LogUECortex);
@@ -21,6 +24,9 @@ void FUECortexModule::StartupModule()
 
 	// --- Core tool modules — always registered ---
 	Registry.RegisterModule(MakeShared<FMCPLevelTools>());
+	Registry.RegisterModule(MakeShared<FMCPViewportCaptureTools>());
+	Registry.RegisterModule(MakeShared<FMCPEditorInputTools>());
+	Registry.RegisterModule(MakeShared<FMCPFabTools>());
 	Registry.RegisterModule(MakeShared<FMCPSplineTools>());
 	Registry.RegisterModule(MakeShared<FMCPVolumeTools>());
 	Registry.RegisterModule(MakeShared<FMCPBlueprintTools>());

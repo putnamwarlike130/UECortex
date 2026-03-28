@@ -2,7 +2,7 @@
 
 Native Unreal Engine 5 plugin that runs a full [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server inside the Unreal Editor. Control your project directly from Claude Code, VS Code, or any MCP client — no Python sidecar, no Node.js process, no external dependencies.
 
-**139 tools** across 13 categories. Pure C++.
+**142 tools** across 15 categories. Pure C++ core, with a Python-backed dynamic tool layer.
 
 ---
 
@@ -43,7 +43,7 @@ GET http://localhost:7777/health
 ## Tool Categories
 
 ### Level & Actors
-`actor_spawn` `actor_delete` `actor_set_transform` `actor_get_properties` `actor_list` `actor_find_by_tag` `level_get_info` `viewport_focus` `console_command` `level_save` ...
+`actor_spawn` `actor_spawn_on_surface` `actor_delete` `actor_duplicate` `actor_set_transform` `actor_set_property` `actor_get_properties` `actor_get_selected` `actor_list` `actor_find_by_name` `level_get_info` `line_trace` `viewport_focus` `viewport_set_camera` `console_command`
 
 ### Blueprints
 `blueprint_list` `blueprint_get_graph` `blueprint_add_node` `blueprint_connect_pins` `blueprint_set_property` `blueprint_compile` `blueprint_add_component` ...
@@ -77,6 +77,23 @@ GET http://localhost:7777/health
 
 ### Asset Management
 `asset_list` `asset_get_info` `asset_get_references` `asset_get_dependencies` `asset_move` `asset_copy` `asset_delete` `asset_create_folder` `asset_list_redirectors` `asset_fix_redirectors`
+
+### Viewport & Input *(Windows/macOS)*
+`viewport_capture` `editor_input`
+
+`viewport_capture` captures the 3D viewport or the full editor window as a PNG image. `editor_input` simulates mouse clicks and keyboard input on the editor window — useful for driving UI flows like the Fab browser search bar.
+
+### Fab Marketplace
+`fab_login_status` `fab_search` `fab_get_asset`
+
+`fab_login_status` checks EOS login state (required for purchases). `fab_search` and `fab_get_asset` are dynamic Python tools — load them once per session:
+
+```bash
+# Via MCP or curl:
+python_reload_tools_from_file  →  Scripts/fab_tools.json
+```
+
+> **Purchase consent policy:** `fab_get_asset` is an information-only tool. Every response includes an explicit `CONSENT REQUIRED` notice. AI agents must never trigger a purchase, add-to-cart, or any payment action without explicit confirmation from the user.
 
 ### Python & Dynamic Tools
 `python_exec` `python_exec_file` `python_check` `python_set_var` `python_get_var` `python_list_scripts` `python_register_tool` `python_unregister_tool` `python_list_dynamic_tools` `python_reload_tools_from_file`
@@ -149,3 +166,4 @@ All other categories load unconditionally.
 | `UECortexAsset` | Asset management tools |
 | `UECortexSequencer` | Level Sequence / cinematics tools |
 | `UECortexPython` | Python executor + dynamic tool registry |
+| `UECortex` (core) | Also includes: `editor_input`, `viewport_capture`, `fab_login_status` |
