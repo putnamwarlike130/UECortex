@@ -20,10 +20,16 @@
 #include "AnimationStateGraphSchema.h"
 #include "AnimationStateMachineGraph.h"
 #include "AnimationStateMachineSchema.h"
+#include "AnimStateEntryNode.h"
 #include "Animation/BlendSpace.h"
+#include "EdGraphSchema_K2.h"
 #include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
+#include "K2Node_Event.h"
 #include "K2Node_CallFunction.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/MovementComponent.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -197,6 +203,37 @@ void FMCPAnimTools::RegisterTools(TArray<FMCPToolDef>& OutTools)
 			{ TEXT("skeleton_path"), TEXT("string"), TEXT("Content path to the target Skeleton asset"), true },
 		};
 		T.Handler = [](const TSharedPtr<FJsonObject>& P) { return AnimFixSkeletonReference(P); };
+		OutTools.Add(T);
+	}
+	{
+		FMCPToolDef T;
+		T.Name = TEXT("anim_set_entry_state");
+		T.Description = TEXT("Connect the Entry node to a named state in a State Machine. The Entry node determines which state plays first. anim_add_state auto-connects Entry to the first state added, but call this to change it later.");
+		T.Params = {
+			{ TEXT("anim_bp_path"), TEXT("string"), TEXT("Content path to the Animation Blueprint"), true },
+			{ TEXT("sm_name"),      TEXT("string"), TEXT("Name of the state machine"), true },
+			{ TEXT("state_name"),   TEXT("string"), TEXT("Name of the state to set as the entry state"), true },
+		};
+		T.Handler = [](const TSharedPtr<FJsonObject>& P) { return AnimSetEntryState(P); };
+		OutTools.Add(T);
+	}
+	{
+		FMCPToolDef T;
+		T.Name = TEXT("anim_create_locomotion_setup");
+		T.Description = TEXT(
+			"Build a full 5-state locomotion state machine (Idle/WalkRun/Jump/Fall/Land) on an existing Animation Blueprint in one call. "
+			"Adds Speed (float) and IsInAir (bool) variables, creates LocomotionSM, assigns animations, wires all transitions and conditions, and compiles. "
+			"The EventGraph update logic (velocity -> Speed, IsFalling -> IsInAir) must be wired manually after.");
+		T.Params = {
+			{ TEXT("anim_bp_path"),      TEXT("string"), TEXT("Content path to an existing Animation Blueprint"), true },
+			{ TEXT("idle"),              TEXT("string"), TEXT("Content path to the Idle AnimSequence"), true },
+			{ TEXT("walk_run"),          TEXT("string"), TEXT("Content path to the WalkRun BlendSpace or AnimSequence"), true },
+			{ TEXT("jump"),              TEXT("string"), TEXT("Content path to the Jump AnimSequence"), true },
+			{ TEXT("fall"),              TEXT("string"), TEXT("Content path to the Fall AnimSequence"), true },
+			{ TEXT("land"),              TEXT("string"), TEXT("Content path to the Land AnimSequence"), true },
+			{ TEXT("speed_threshold"),   TEXT("string"), TEXT("Speed value where Idle<->WalkRun transition fires (default: 10.0)"), false },
+		};
+		T.Handler = [](const TSharedPtr<FJsonObject>& P) { return AnimCreateLocomotionSetup(P); };
 		OutTools.Add(T);
 	}
 }
@@ -453,6 +490,15 @@ FMCPToolResult FMCPAnimTools::AnimCreateAnimBlueprint(const TSharedPtr<FJsonObje
 	const UAnimationGraphSchema* Schema = GetDefault<UAnimationGraphSchema>();
 	Schema->CreateDefaultNodesForGraph(*AnimGraph);
 
+	// Create the EventGraph (Ubergraph) — without it there is no EventGraph tab in the editor
+	// and no place to wire BlueprintUpdateAnimation logic (speed, IsInAir, etc.)
+	UEdGraph* EventGraph = FBlueprintEditorUtils::CreateNewGraph(
+		AnimBP,
+		FName(TEXT("EventGraph")),
+		UEdGraph::StaticClass(),
+		UEdGraphSchema_K2::StaticClass());
+	AnimBP->UbergraphPages.Add(EventGraph);
+
 	FAssetRegistryModule::AssetCreated(AnimBP);
 	Package->MarkPackageDirty();
 
@@ -586,7 +632,9 @@ FMCPToolResult FMCPAnimTools::AnimAddStateMachine(const TSharedPtr<FJsonObject>&
 	}
 	if (RootNode)
 	{
-		RootNode->AllocateDefaultPins();
+		// Only allocate pins if they don't exist yet — CreateDefaultNodesForGraph already did this
+		// on the first call. Re-allocating breaks any existing connections to Output Pose.
+		if (RootNode->Pins.Num() == 0) RootNode->AllocateDefaultPins();
 		const UAnimationGraphSchema* Schema = CastChecked<UAnimationGraphSchema>(AnimGraph->GetSchema());
 		UEdGraphPin* SMOutPin = nullptr;
 		UEdGraphPin* RootInPin = nullptr;
@@ -649,14 +697,37 @@ FMCPToolResult FMCPAnimTools::AnimAddState(const TSharedPtr<FJsonObject>& Params
 	if (!SMGraph)
 		return FMCPToolResult::Error(TEXT("State machine graph is invalid"));
 
+	// Count existing states to compute a spread-out position
+	int32 ExistingStateCount = 0;
+	for (UEdGraphNode* N : SMGraph->Nodes)
+		if (Cast<UAnimStateNode>(N)) ExistingStateCount++;
+
 	// Use FGraphNodeCreator — properly calls AllocateDefaultPins + PostPlacedNewNode.
 	// PostPlacedNewNode creates BoundGraph automatically and initialises the compiler's
 	// internal state arrays. Raw NewObject + AddNode bypasses all of this and causes
 	// "Array index out of bounds" crashes in the AnimBP compiler.
 	FGraphNodeCreator<UAnimStateNode> NodeCreator(*SMGraph);
 	UAnimStateNode* StateNode = NodeCreator.CreateNode(false);
+	StateNode->NodePosX = 200 + ExistingStateCount * 300;
+	StateNode->NodePosY = 0;
 	NodeCreator.Finalize();
 	StateNode->OnRenameNode(StateName);
+
+	// Auto-connect Entry → first state added
+	if (ExistingStateCount == 0)
+	{
+		UAnimStateEntryNode* EntryNode = nullptr;
+		for (UEdGraphNode* N : SMGraph->Nodes)
+			if (UAnimStateEntryNode* EN = Cast<UAnimStateEntryNode>(N)) { EntryNode = EN; break; }
+		if (EntryNode)
+		{
+			const UEdGraphSchema* SMSchema = SMGraph->GetSchema();
+			UEdGraphPin* EntryOut = nullptr; UEdGraphPin* StateIn = nullptr;
+			for (UEdGraphPin* P : EntryNode->Pins) if (P->Direction == EGPD_Output) { EntryOut = P; break; }
+			for (UEdGraphPin* P : StateNode->Pins)  if (P->Direction == EGPD_Input)  { StateIn  = P; break; }
+			if (EntryOut && StateIn) SMSchema->TryCreateConnection(EntryOut, StateIn);
+		}
+	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
 	return FMCPToolResult::Success(
@@ -979,7 +1050,8 @@ FMCPToolResult FMCPAnimTools::AnimSetTransitionCondition(const TSharedPtr<FJsonO
 	if (!Params->TryGetStringField(TEXT("from_state"),     FromState))      return FMCPToolResult::Error(TEXT("Missing: from_state"));
 	if (!Params->TryGetStringField(TEXT("to_state"),       ToState))        return FMCPToolResult::Error(TEXT("Missing: to_state"));
 	if (!Params->TryGetStringField(TEXT("condition_type"), ConditionType))  return FMCPToolResult::Error(TEXT("Missing: condition_type"));
-	if (!Params->TryGetStringField(TEXT("variable"),       VarName))        return FMCPToolResult::Error(TEXT("Missing: variable"));
+	// variable + value are only required for non-always_true conditions — read them after the type check
+	Params->TryGetStringField(TEXT("variable"), VarName);
 	Params->TryGetStringField(TEXT("value"), ValueStr);
 
 	UAnimBlueprint* AnimBP = LoadAnimBlueprint(AnimBPPath);
@@ -1046,6 +1118,19 @@ FMCPToolResult FMCPAnimTools::AnimSetTransitionCondition(const TSharedPtr<FJsonO
 	}
 	if (!ResultPin)
 		return FMCPToolResult::Error(TEXT("TransitionResult has no input pin"));
+
+	// always_true: unconditional transition — bCanEnterTransition defaults to true when unconnected.
+	// Set it explicitly and return early; no variable getter needed.
+	if (ConditionType.Equals(TEXT("always_true"), ESearchCase::IgnoreCase))
+	{
+		ResultPin->DefaultValue = TEXT("true");
+		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+		return FMCPToolResult::Success(FString::Printf(
+			TEXT("Set transition condition '%s -> %s': always_true (fires unconditionally)"), *FromState, *ToState));
+	}
+
+	if (VarName.IsEmpty())
+		return FMCPToolResult::Error(TEXT("Missing: variable (required for all condition types except always_true)"));
 
 	// Validate the variable exists — check compiled GeneratedClass first, then uncompiled NewVariables
 	// (Variables added with blueprint_add_variable don't appear in GeneratedClass until the BP is compiled)
@@ -1136,4 +1221,365 @@ FMCPToolResult FMCPAnimTools::AnimSetTransitionCondition(const TSharedPtr<FJsonO
 	return FMCPToolResult::Success(FString::Printf(
 		TEXT("Set transition condition '%s -> %s': %s(%s%s)"),
 		*FromState, *ToState, *ConditionType, *VarName, *ExtraPart));
+}
+
+// ---------------------------------------------------------------------------
+// anim_set_entry_state
+// ---------------------------------------------------------------------------
+
+FMCPToolResult FMCPAnimTools::AnimSetEntryState(const TSharedPtr<FJsonObject>& Params)
+{
+	FString AnimBPPath, SMName, StateName;
+	if (!Params->TryGetStringField(TEXT("anim_bp_path"), AnimBPPath)) return FMCPToolResult::Error(TEXT("Missing: anim_bp_path"));
+	if (!Params->TryGetStringField(TEXT("sm_name"),      SMName))     return FMCPToolResult::Error(TEXT("Missing: sm_name"));
+	if (!Params->TryGetStringField(TEXT("state_name"),   StateName))  return FMCPToolResult::Error(TEXT("Missing: state_name"));
+
+	UAnimBlueprint* AnimBP = LoadAnimBlueprint(AnimBPPath);
+	if (!AnimBP)
+		return FMCPToolResult::Error(FString::Printf(TEXT("AnimBP not found: %s"), *AnimBPPath));
+
+	UAnimationStateMachineGraph* SMGraph = FindSMGraph(AnimBP, SMName);
+	if (!SMGraph)
+		return FMCPToolResult::Error(FString::Printf(TEXT("State machine '%s' not found"), *SMName));
+
+	UAnimStateEntryNode* EntryNode = nullptr;
+	UAnimStateNode*      TargetState = nullptr;
+	for (UEdGraphNode* N : SMGraph->Nodes)
+	{
+		if (!EntryNode)   EntryNode   = Cast<UAnimStateEntryNode>(N);
+		if (!TargetState)
+		{
+			if (UAnimStateNode* SN = Cast<UAnimStateNode>(N))
+				if (SN->GetStateName() == StateName) TargetState = SN;
+		}
+		if (EntryNode && TargetState) break;
+	}
+	if (!EntryNode)    return FMCPToolResult::Error(TEXT("State machine has no Entry node"));
+	if (!TargetState)  return FMCPToolResult::Error(FString::Printf(TEXT("State '%s' not found in '%s'"), *StateName, *SMName));
+
+	// Break any existing entry connection first
+	for (UEdGraphPin* Pin : EntryNode->Pins)
+		if (Pin->Direction == EGPD_Output) { Pin->BreakAllPinLinks(); break; }
+
+	const UEdGraphSchema* Schema = SMGraph->GetSchema();
+	UEdGraphPin* EntryOut = nullptr; UEdGraphPin* StateIn = nullptr;
+	for (UEdGraphPin* P : EntryNode->Pins)  if (P->Direction == EGPD_Output) { EntryOut = P; break; }
+	for (UEdGraphPin* P : TargetState->Pins) if (P->Direction == EGPD_Input)  { StateIn  = P; break; }
+
+	if (!EntryOut || !StateIn)
+		return FMCPToolResult::Error(TEXT("Could not find entry/state pins"));
+
+	Schema->TryCreateConnection(EntryOut, StateIn);
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	return FMCPToolResult::Success(FString::Printf(
+		TEXT("Entry -> '%s' connected in state machine '%s'"), *StateName, *SMName));
+}
+
+// ---------------------------------------------------------------------------
+// anim_create_locomotion_setup
+// ---------------------------------------------------------------------------
+
+FMCPToolResult FMCPAnimTools::AnimCreateLocomotionSetup(const TSharedPtr<FJsonObject>& Params)
+{
+	// --- Required params ---
+	FString AnimBPPath, IdlePath, WalkRunPath, JumpPath, FallPath, LandPath;
+	if (!Params->TryGetStringField(TEXT("anim_bp_path"), AnimBPPath))  return FMCPToolResult::Error(TEXT("Missing: anim_bp_path"));
+	if (!Params->TryGetStringField(TEXT("idle"),         IdlePath))    return FMCPToolResult::Error(TEXT("Missing: idle"));
+	if (!Params->TryGetStringField(TEXT("walk_run"),     WalkRunPath)) return FMCPToolResult::Error(TEXT("Missing: walk_run"));
+	if (!Params->TryGetStringField(TEXT("jump"),         JumpPath))    return FMCPToolResult::Error(TEXT("Missing: jump"));
+	if (!Params->TryGetStringField(TEXT("fall"),         FallPath))    return FMCPToolResult::Error(TEXT("Missing: fall"));
+	if (!Params->TryGetStringField(TEXT("land"),         LandPath))    return FMCPToolResult::Error(TEXT("Missing: land"));
+
+	FString ThresholdStr;
+	float SpeedThreshold = 10.f;
+	if (Params->TryGetStringField(TEXT("speed_threshold"), ThresholdStr))
+		SpeedThreshold = FCString::Atof(*ThresholdStr);
+
+	// --- Load AnimBP ---
+	UAnimBlueprint* AnimBP = LoadAnimBlueprint(AnimBPPath);
+	if (!AnimBP)
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("AnimBP not found: %s — create it first with anim_create_anim_blueprint"), *AnimBPPath));
+
+	// --- Add Speed (float) and IsInAir (bool) variables ---
+	{
+		FEdGraphPinType FloatType;
+		FloatType.PinCategory    = UEdGraphSchema_K2::PC_Real;
+		FloatType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+		FBlueprintEditorUtils::AddMemberVariable(AnimBP, FName(TEXT("Speed")), FloatType);
+
+		FEdGraphPinType BoolType;
+		BoolType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+		FBlueprintEditorUtils::AddMemberVariable(AnimBP, FName(TEXT("IsInAir")), BoolType);
+	}
+
+	// --- Find main AnimGraph ---
+	UAnimationGraph* AnimGraph = nullptr;
+	for (UEdGraph* G : AnimBP->FunctionGraphs)
+		if (UAnimationGraph* AG = Cast<UAnimationGraph>(G)) { AnimGraph = AG; break; }
+	if (!AnimGraph)
+		return FMCPToolResult::Error(TEXT("No AnimationGraph found — was the AnimBP created with anim_create_anim_blueprint?"));
+
+	// --- Create LocomotionSM state machine ---
+	FGraphNodeCreator<UAnimGraphNode_StateMachine> SMCreator(*AnimGraph);
+	UAnimGraphNode_StateMachine* SMNode = SMCreator.CreateNode(false);
+	SMNode->NodePosX = -300; SMNode->NodePosY = 0;
+	SMCreator.Finalize();
+
+	UAnimationStateMachineGraph* SMGraph = Cast<UAnimationStateMachineGraph>(SMNode->EditorStateMachineGraph);
+	if (!SMGraph) return FMCPToolResult::Error(TEXT("SM graph creation failed"));
+	SMGraph->Rename(TEXT("LocomotionSM"), nullptr, REN_DontCreateRedirectors);
+
+	// Wire SM output to Output Pose
+	UAnimGraphNode_Root* RootNode = nullptr;
+	for (UEdGraphNode* N : AnimGraph->Nodes)
+		if (UAnimGraphNode_Root* R = Cast<UAnimGraphNode_Root>(N)) { RootNode = R; break; }
+	if (RootNode)
+	{
+		if (RootNode->Pins.Num() == 0) RootNode->AllocateDefaultPins();
+		const UAnimationGraphSchema* ASch = CastChecked<UAnimationGraphSchema>(AnimGraph->GetSchema());
+		UEdGraphPin* SMOut = nullptr; UEdGraphPin* RootIn = nullptr;
+		for (UEdGraphPin* P : SMNode->Pins)  if (P->Direction == EGPD_Output) { SMOut = P; break; }
+		for (UEdGraphPin* P : RootNode->Pins) if (P->Direction == EGPD_Input) { RootIn = P; break; }
+		if (SMOut && RootIn) ASch->TryCreateConnection(SMOut, RootIn);
+	}
+
+	// --- Add 5 states (Idle first so Entry auto-connects to it) ---
+	struct FStateInfo { FString Name; int32 X; int32 Y; };
+	const TArray<FStateInfo> StateLayout = {
+		{ TEXT("Idle"),    200,    0 },
+		{ TEXT("WalkRun"), 500,    0 },
+		{ TEXT("Jump"),    350, -200 },
+		{ TEXT("Fall"),    550, -200 },
+		{ TEXT("Land"),    750,    0 },
+	};
+
+	for (const FStateInfo& SI : StateLayout)
+	{
+		// Count existing states to respect auto-position logic, but use our explicit layout
+		FGraphNodeCreator<UAnimStateNode> SC(*SMGraph);
+		UAnimStateNode* SN = SC.CreateNode(false);
+		SN->NodePosX = SI.X; SN->NodePosY = SI.Y;
+		SC.Finalize();
+		SN->OnRenameNode(SI.Name);
+
+		// Auto-connect Entry → Idle (first state)
+		if (SI.Name == TEXT("Idle"))
+		{
+			UAnimStateEntryNode* EntryNode = nullptr;
+			for (UEdGraphNode* N : SMGraph->Nodes)
+				if (UAnimStateEntryNode* EN = Cast<UAnimStateEntryNode>(N)) { EntryNode = EN; break; }
+			if (EntryNode)
+			{
+				const UEdGraphSchema* SMSchema = SMGraph->GetSchema();
+				UEdGraphPin* EOut = nullptr; UEdGraphPin* SIn = nullptr;
+				for (UEdGraphPin* P : EntryNode->Pins) if (P->Direction == EGPD_Output) { EOut = P; break; }
+				for (UEdGraphPin* P : SN->Pins)        if (P->Direction == EGPD_Input)  { SIn  = P; break; }
+				if (EOut && SIn) SMSchema->TryCreateConnection(EOut, SIn);
+			}
+		}
+	}
+
+	// --- Assign animations ---
+	auto SetAnim = [&](const FString& State, const FString& AssetPath) -> FMCPToolResult
+	{
+		auto P = MakeShared<FJsonObject>();
+		P->SetStringField(TEXT("anim_bp_path"),    AnimBPPath);
+		P->SetStringField(TEXT("sm_name"),         TEXT("LocomotionSM"));
+		P->SetStringField(TEXT("state_name"),      State);
+		P->SetStringField(TEXT("animation_asset"), AssetPath);
+		return AnimSetStateAnimation(P);
+	};
+	FMCPToolResult R;
+	R = SetAnim(TEXT("Idle"),    IdlePath);    if (!R.bSuccess) return R;
+	R = SetAnim(TEXT("WalkRun"), WalkRunPath); if (!R.bSuccess) return R;
+	R = SetAnim(TEXT("Jump"),    JumpPath);    if (!R.bSuccess) return R;
+	R = SetAnim(TEXT("Fall"),    FallPath);    if (!R.bSuccess) return R;
+	R = SetAnim(TEXT("Land"),    LandPath);    if (!R.bSuccess) return R;
+
+	// --- Add transitions ---
+	auto AddTrans = [&](const FString& From, const FString& To) -> FMCPToolResult
+	{
+		auto P = MakeShared<FJsonObject>();
+		P->SetStringField(TEXT("anim_bp_path"), AnimBPPath);
+		P->SetStringField(TEXT("sm_name"),      TEXT("LocomotionSM"));
+		P->SetStringField(TEXT("from_state"),   From);
+		P->SetStringField(TEXT("to_state"),     To);
+		return AnimAddTransition(P);
+	};
+	R = AddTrans(TEXT("Idle"),    TEXT("WalkRun")); if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("WalkRun"), TEXT("Idle"));    if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("Idle"),    TEXT("Jump"));    if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("WalkRun"), TEXT("Jump"));    if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("Jump"),    TEXT("Fall"));    if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("Fall"),    TEXT("Land"));    if (!R.bSuccess) return R;
+	R = AddTrans(TEXT("Land"),    TEXT("Idle"));    if (!R.bSuccess) return R;
+
+	// --- Compile before setting conditions (variable getter needs compiled FProperty) ---
+	FKismetEditorUtilities::CompileBlueprint(AnimBP, EBlueprintCompileOptions::None);
+
+	// --- Set transition conditions ---
+	FString ThreshStr = FString::Printf(TEXT("%f"), SpeedThreshold);
+	auto SetCond = [&](const FString& From, const FString& To,
+	                   const FString& Type, const FString& Var = TEXT(""), const FString& Val = TEXT("")) -> FMCPToolResult
+	{
+		auto P = MakeShared<FJsonObject>();
+		P->SetStringField(TEXT("anim_bp_path"),   AnimBPPath);
+		P->SetStringField(TEXT("sm_name"),        TEXT("LocomotionSM"));
+		P->SetStringField(TEXT("from_state"),     From);
+		P->SetStringField(TEXT("to_state"),       To);
+		P->SetStringField(TEXT("condition_type"), Type);
+		if (!Var.IsEmpty()) P->SetStringField(TEXT("variable"), Var);
+		if (!Val.IsEmpty()) P->SetStringField(TEXT("value"),    Val);
+		return AnimSetTransitionCondition(P);
+	};
+	R = SetCond(TEXT("Idle"),    TEXT("WalkRun"), TEXT("variable_greater_than"), TEXT("Speed"),   ThreshStr); if (!R.bSuccess) return R;
+	R = SetCond(TEXT("WalkRun"), TEXT("Idle"),    TEXT("variable_less_than"),    TEXT("Speed"),   ThreshStr); if (!R.bSuccess) return R;
+	R = SetCond(TEXT("Idle"),    TEXT("Jump"),    TEXT("variable_true"),          TEXT("IsInAir"));            if (!R.bSuccess) return R;
+	R = SetCond(TEXT("WalkRun"), TEXT("Jump"),    TEXT("variable_true"),          TEXT("IsInAir"));            if (!R.bSuccess) return R;
+	R = SetCond(TEXT("Jump"),    TEXT("Fall"),    TEXT("variable_true"),          TEXT("IsInAir"));            if (!R.bSuccess) return R;
+	R = SetCond(TEXT("Fall"),    TEXT("Land"),    TEXT("variable_false"),         TEXT("IsInAir"));            if (!R.bSuccess) return R;
+	R = SetCond(TEXT("Land"),    TEXT("Idle"),    TEXT("always_true"));                                        if (!R.bSuccess) return R;
+
+	// --- Wire EventGraph (BlueprintUpdateAnimation → Speed / IsInAir update) ---
+	bool bEventGraphWired = false;
+	{
+		UEdGraph* EventGraph = AnimBP->UbergraphPages.Num() > 0 ? AnimBP->UbergraphPages[0] : nullptr;
+		if (EventGraph)
+		{
+			const UEdGraphSchema_K2* K2Schema = CastChecked<UEdGraphSchema_K2>(EventGraph->GetSchema());
+
+			// Find or create the BlueprintUpdateAnimation event node
+			UK2Node_Event* EventNode = nullptr;
+			static const FName UpdateAnimFuncName = GET_FUNCTION_NAME_CHECKED(UAnimInstance, BlueprintUpdateAnimation);
+			for (UEdGraphNode* N : EventGraph->Nodes)
+				if (UK2Node_Event* E = Cast<UK2Node_Event>(N))
+					if (E->EventReference.GetMemberName() == UpdateAnimFuncName)
+					{ EventNode = E; break; }
+
+			if (!EventNode)
+			{
+				FGraphNodeCreator<UK2Node_Event> EvCreator(*EventGraph);
+				EventNode = EvCreator.CreateNode(false);
+				EventNode->EventReference.SetExternalMember(UpdateAnimFuncName, UAnimInstance::StaticClass());
+				EventNode->bOverrideFunction = true;
+				EventNode->NodePosX = 0; EventNode->NodePosY = 0;
+				EvCreator.Finalize();
+			}
+
+			// Helper: create a call function node
+			auto MakeCallNode = [&](UClass* Class, const TCHAR* FuncName, int32 X, int32 Y) -> UK2Node_CallFunction*
+			{
+				if (!Class) return nullptr;
+				UFunction* Func = Class->FindFunctionByName(FuncName);
+				if (!Func) return nullptr;
+				FGraphNodeCreator<UK2Node_CallFunction> C(*EventGraph);
+				UK2Node_CallFunction* Node = C.CreateNode(false);
+				Node->SetFromFunction(Func);
+				Node->NodePosX = X; Node->NodePosY = Y;
+				C.Finalize();
+				return Node;
+			};
+
+			// Speed path: TryGetPawnOwner → GetVelocity → (VSize pure) → SetSpeed
+			UK2Node_CallFunction* TryGetPawnNode = MakeCallNode(UAnimInstance::StaticClass(),      TEXT("TryGetPawnOwner"),      250,   0);
+			UK2Node_CallFunction* GetVelNode     = MakeCallNode(AActor::StaticClass(),             TEXT("GetVelocity"),          500,   0);
+			UK2Node_CallFunction* VSizeNode      = MakeCallNode(UKismetMathLibrary::StaticClass(), TEXT("VSize"),                700,   0);
+
+			FGraphNodeCreator<UK2Node_VariableSet> SetSpeedCreator(*EventGraph);
+			UK2Node_VariableSet* SetSpeedNode = SetSpeedCreator.CreateNode(false);
+			SetSpeedNode->VariableReference.SetSelfMember(FName(TEXT("Speed")));
+			SetSpeedNode->NodePosX = 900; SetSpeedNode->NodePosY = 0;
+			SetSpeedCreator.Finalize();
+
+			// IsInAir path: TryGetPawnOwner → GetMovementComponent → IsFalling → SetIsInAir
+			UK2Node_CallFunction* TryGetPawnNode2 = MakeCallNode(UAnimInstance::StaticClass(),      TEXT("TryGetPawnOwner"),     250, 250);
+			UK2Node_CallFunction* GetMovCompNode  = MakeCallNode(APawn::StaticClass(),              TEXT("GetMovementComponent"),500, 250);
+			UK2Node_CallFunction* IsFallingNode   = MakeCallNode(UMovementComponent::StaticClass(), TEXT("IsFalling"),           700, 250);
+
+			FGraphNodeCreator<UK2Node_VariableSet> SetIsInAirCreator(*EventGraph);
+			UK2Node_VariableSet* SetIsInAirNode = SetIsInAirCreator.CreateNode(false);
+			SetIsInAirNode->VariableReference.SetSelfMember(FName(TEXT("IsInAir")));
+			SetIsInAirNode->NodePosX = 900; SetIsInAirNode->NodePosY = 250;
+			SetIsInAirCreator.Finalize();
+
+			// Exec chain (VSize is pure — no exec pins, skip in chain)
+			auto ConnExec = [&](UEdGraphNode* From, UEdGraphNode* To)
+			{
+				if (!From || !To) return;
+				UEdGraphPin* Out = From->FindPin(UEdGraphSchema_K2::PN_Then);
+				UEdGraphPin* In  = To->FindPin(UEdGraphSchema_K2::PN_Execute);
+				if (Out && In) K2Schema->TryCreateConnection(Out, In);
+			};
+			ConnExec(EventNode,        TryGetPawnNode);
+			ConnExec(TryGetPawnNode,   GetVelNode);
+			ConnExec(GetVelNode,       SetSpeedNode);
+			ConnExec(SetSpeedNode,     TryGetPawnNode2);
+			ConnExec(TryGetPawnNode2,  GetMovCompNode);
+			ConnExec(GetMovCompNode,   IsFallingNode);
+			ConnExec(IsFallingNode,    SetIsInAirNode);
+
+			// Data: TryGetPawn.Return → GetVelocity.Target
+			if (TryGetPawnNode && GetVelNode)
+			{
+				UEdGraphPin* PawnRet   = TryGetPawnNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* VelTarget = GetVelNode->FindPin(UEdGraphSchema_K2::PN_Self);
+				if (PawnRet && VelTarget) K2Schema->TryCreateConnection(PawnRet, VelTarget);
+			}
+			// GetVelocity.Return → VSize.A
+			if (GetVelNode && VSizeNode)
+			{
+				UEdGraphPin* VelRet = GetVelNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* SizeA  = VSizeNode->FindPin(TEXT("A"));
+				if (VelRet && SizeA) K2Schema->TryCreateConnection(VelRet, SizeA);
+			}
+			// VSize.Return → SetSpeed.Speed
+			if (VSizeNode && SetSpeedNode)
+			{
+				UEdGraphPin* SizeRet  = VSizeNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* SpeedPin = SetSpeedNode->FindPin(TEXT("Speed"));
+				if (SizeRet && SpeedPin) K2Schema->TryCreateConnection(SizeRet, SpeedPin);
+			}
+			// TryGetPawn2.Return → GetMovComp.Target
+			if (TryGetPawnNode2 && GetMovCompNode)
+			{
+				UEdGraphPin* PawnRet2  = TryGetPawnNode2->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* MovTarget = GetMovCompNode->FindPin(UEdGraphSchema_K2::PN_Self);
+				if (PawnRet2 && MovTarget) K2Schema->TryCreateConnection(PawnRet2, MovTarget);
+			}
+			// GetMovComp.Return → IsFalling.Target
+			if (GetMovCompNode && IsFallingNode)
+			{
+				UEdGraphPin* MovRet     = GetMovCompNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* FallTarget = IsFallingNode->FindPin(UEdGraphSchema_K2::PN_Self);
+				if (MovRet && FallTarget) K2Schema->TryCreateConnection(MovRet, FallTarget);
+			}
+			// IsFalling.Return → SetIsInAir.IsInAir
+			if (IsFallingNode && SetIsInAirNode)
+			{
+				UEdGraphPin* FallRet = IsFallingNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+				UEdGraphPin* AirPin  = SetIsInAirNode->FindPin(TEXT("IsInAir"));
+				if (FallRet && AirPin) K2Schema->TryCreateConnection(FallRet, AirPin);
+			}
+
+			FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+			bEventGraphWired = true;
+		}
+	}
+
+	// --- Final compile + save ---
+	FKismetEditorUtilities::CompileBlueprint(AnimBP, EBlueprintCompileOptions::None);
+	UPackage* Package = AnimBP->GetOutermost();
+	if (Package)
+	{
+		Package->MarkPackageDirty();
+		FEditorFileUtils::SaveDirtyPackages(false, true, true, false, false, false);
+	}
+
+	const TCHAR* EventGraphNote = bEventGraphWired
+		? TEXT(" EventGraph wired: BlueprintUpdateAnimation -> TryGetPawnOwner -> VSize(GetVelocity) -> SetSpeed + IsFalling -> SetIsInAir.")
+		: TEXT(" NOTE: No EventGraph found — wire Speed/IsInAir updates manually in the AnimBP.");
+	return FMCPToolResult::Success(FString::Printf(
+		TEXT("Locomotion setup complete on '%s'. States: Idle/WalkRun/Jump/Fall/Land with Speed (threshold %.1f) and IsInAir conditions.%s"),
+		*AnimBPPath, SpeedThreshold, EventGraphNote));
 }

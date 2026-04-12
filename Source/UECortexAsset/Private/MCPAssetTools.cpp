@@ -239,16 +239,10 @@ FMCPToolResult FMCPAssetTools::AssetGetInfo(const TSharedPtr<FJsonObject>& Param
 			Response->SetNumberField(TEXT("file_size_bytes"), (double)FileSize);
 	}
 
-	// Tags/metadata
+	// Tags/metadata — read directly from FAssetData (no asset load needed)
 	TSharedPtr<FJsonObject> Tags = MakeShared<FJsonObject>();
-	TArray<UObject::FAssetRegistryTag> AssetTags;
-	// Load the asset to get its tags
-	if (UObject* Obj = A.GetAsset())
-	{
-		Obj->GetAssetRegistryTags(AssetTags);
-		for (const UObject::FAssetRegistryTag& Tag : AssetTags)
-			Tags->SetStringField(Tag.Name.ToString(), Tag.Value);
-	}
+	for (const auto& Pair : A.TagsAndValues)
+		Tags->SetStringField(Pair.Key.ToString(), Pair.Value.AsString());
 	Response->SetObjectField(TEXT("tags"), Tags);
 
 	return FMCPToolResult::Success(

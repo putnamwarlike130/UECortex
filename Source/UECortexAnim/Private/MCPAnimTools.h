@@ -22,4 +22,6 @@ private:
 	static FMCPToolResult AnimSetStateAnimation(const TSharedPtr<FJsonObject>& Params);
 	static FMCPToolResult AnimAddTransition(const TSharedPtr<FJsonObject>& Params);
 	static FMCPToolResult AnimSetTransitionCondition(const TSharedPtr<FJsonObject>& Params);
+	static FMCPToolResult AnimSetEntryState(const TSharedPtr<FJsonObject>& Params);
+	static FMCPToolResult AnimCreateLocomotionSetup(const TSharedPtr<FJsonObject>& Params);
 };

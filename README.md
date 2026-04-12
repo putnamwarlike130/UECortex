@@ -2,7 +2,7 @@
 
 Native Unreal Engine 5 plugin that runs a full [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server inside the Unreal Editor. Control your project directly from Claude Code, VS Code, or any MCP client — no Python sidecar, no Node.js process, no external dependencies.
 
-**167 built-in tools** across 17 categories, plus a Python-backed dynamic tool layer.
+**169 built-in tools** across 17 categories, plus a Python-backed dynamic tool layer.
 
 ---
 
@@ -244,8 +244,10 @@ Build Animation Blueprints, state machines, and retarget animations across skele
 | `anim_add_state` | Add a named state to a State Machine |
 | `anim_set_state_animation` | Assign an AnimSequence or BlendSpace to a state |
 | `anim_add_transition` | Add a transition arrow between two states |
-| `anim_set_transition_condition` | Wire a variable condition onto a transition rule |
+| `anim_set_transition_condition` | Wire a variable condition onto a transition rule (supports `always_true`) |
+| `anim_set_entry_state` | Connect the Entry node to a named state in a State Machine |
 | `anim_compile_anim_blueprint` | Compile and save an Animation Blueprint |
+| `anim_create_locomotion_setup` | One-call full locomotion setup: SM + 5 states + transitions + EventGraph wiring |
 
 **IK Retargeting** *(requires IKRig plugin)*
 
@@ -265,6 +267,8 @@ Build Animation Blueprints, state machines, and retarget animations across skele
 | `skeleton_fix_broken_references` | Repair broken skeleton references across anim assets |
 
 > **Animation Blueprint workflow:** add variable → add state machine → add states → assign animations → add transitions → **compile** → set transition conditions → compile again. Compile must happen before `anim_set_transition_condition` so the variable getter can resolve its type.
+>
+> For standard locomotion, use `anim_create_locomotion_setup` to do all of the above in a single call (includes EventGraph wiring for Speed and IsInAir).
 
 ---
 
